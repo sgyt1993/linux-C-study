@@ -10,6 +10,11 @@
 void *threadHandler(void *arg)
 {
 	 printf("child thread,pid==[%d],thread_id == [%ld]\n",getpid(),pthread_self());
+	 while(1)
+	 {
+		printf("this is live\n");
+		sleep(1);
+	 } 
 }   
 
 
