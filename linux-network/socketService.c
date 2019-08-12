@@ -41,6 +41,7 @@ int main(int argc,char *argv[])
 
 	//int accept(int socket, struct sockaddr *restrict address,socklen_t *restrict address_len);
 	struct sockaddr_in rece;
+	memset(&rece,0x00,sizeof(rece));
 	socklen_t len = sizeof(rece);
 	int acpfd  = accept(socketfd,(struct sockaddr*)&rece,&len);
 	if(acpfd == -1)
