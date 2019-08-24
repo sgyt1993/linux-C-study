@@ -32,6 +32,8 @@ struct myevent_s{
 
 
 
+
+
 //全局变量
 int g_efd;																					//保存epoll_create返回的文件描述符
 int g_lfd;																					//保存监听的文件描述符
