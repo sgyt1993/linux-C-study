@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <dirent.h>
 
 
 //封装的对象，放入epoll的参数中
@@ -22,12 +23,13 @@ typedef struct CLIENT
 }client;
 
 
-void  http_service(client *c);
+void  http_service(client *c,int epfd);
 ssize_t  readLine(int fd,void *vptr,size_t maxlen);
 static ssize_t  char_read(int fd,char *c); 
 int send_header(int fd,char *code,char *msg,char *fileType, int len);
 int send_file(int fd,char *fileName);
 char *get_mime_type(char *name);
+void getDirstr(int fd,char *fileName,char *buffer,int epfd);
 
 
 int main(int argc,char* argv[])
@@ -151,7 +153,7 @@ int main(int argc,char* argv[])
 				epoll_ctl(epfd,EPOLL_CTL_ADD,cfd,&con_event);
 			}else{
 				//处理请求
-				http_service(c);
+				http_service(c,epfd);
 			}
 		}
 	}
@@ -160,16 +162,22 @@ int main(int argc,char* argv[])
 }
 
 //http请求处理
-void  http_service(client *c)
+void  http_service(client *c,int epfd)
 {
 	int readres;
 	char buf[1024];
 	memset(buf,0x00,sizeof(buf));
 	//读取请求行数据
 	readres = readLine(c->ftd,buf,sizeof(buf));
-	if(readres < 0)
+	if(readres <= 0)
 	{
-		exit(0);
+		//printf("read error or client closed, n==[%d]\n", n);
+		//关闭连接
+		close(c->ftd);
+		
+		//将文件描述符从epoll树上删除
+		epoll_ctl(epfd, EPOLL_CTL_DEL, c->ftd, NULL);
+		return ;	
 	}
 	printf("%s\n",buf);
 	//GET /hanzi.c HTTP/1.1  解析出请求的文件
@@ -182,13 +190,17 @@ void  http_service(client *c)
 	printf("protocal == %s\n",protocal);
 	
 	char *pFile = fileName+1;
-	printf("[%s]\n", pFile);//去掉/的剩下的文件名称
-
+	if(strlen(fileName)<=1)
+	{
+		strcpy(pFile, "./");
+	}else
+	{
+		printf("[%s]\n", pFile);//去掉/的剩下的文件名称
+	}
+	
 	//循环读取完剩余的数据
 	while((readres=readLine(c->ftd, buf, sizeof(buf)))>0);
 	
-	printf("数据读完\n");
-
 	//判断文件是否存在
 	struct stat st;
 	int res = stat(pFile,&st);
@@ -204,17 +216,35 @@ void  http_service(client *c)
 		send_file(c->ftd,"error.html");
 	}else
 	{
-		//表示文件不存在
-		printf("file is exit\n");
 		//判断文件类型
 		//普通文件
 		if(S_ISREG(st.st_mode))
 		{
+			printf("type is file\n");
+			
 			//发送头部信息
 			send_header(c->ftd, "200", "OK", get_mime_type(pFile), st.st_size);
 			
 			//发送文件内容
 			send_file(c->ftd, pFile);
+		}else if(S_ISDIR(st.st_mode))
+		{
+			char buffer[2048];
+			memset(buffer,0x00,sizeof(buffer));
+
+			printf("type is dir\n");
+			//发送头部信息
+			send_header(c->ftd, "200", "OK", get_mime_type(".html"), 0);
+
+			//这个是目录文件
+			//循环拿到每个文件下的名称放在两个文件中间
+			send_file(c->ftd,"http/dir_header.html");
+			
+			getDirstr(c->ftd,pFile,buffer,epfd);
+			printf("buffer == [%s]\n",buffer);
+			write(c->ftd,buffer,strlen(buffer));
+			
+			send_file(c->ftd,"http/dir_tail.html");
 		}
 	}
 
@@ -326,6 +356,40 @@ ssize_t  readLine(int fd,void *vptr,size_t maxlen)
 	return i;
 }
 
+//读取文件夹下面的所有文件
+void getDirstr(int fd,char *fileName,char *buffer,int epfd)
+{
+	struct dirent **namelist;
+	int n;
+	n = scandir(fileName,&namelist, NULL, alphasort);
+	if(n == -1)
+	{
+		perror("scandir is error\n");
+		close(fd);
+		epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
+		return;
+	}
+	
+	char buf[1024];
+	while(n--)
+	{
+		memset(buf,0x00,sizeof(buf));
+		printf("%s\n",namelist[n]->d_name);
+		//这里要判断是否是文件夹，如果是文件夹要加/
+		if(namelist[n]->d_type == DT_REG)
+		{
+			sprintf(buf,"<li><a href=%s>%s</a></li>",namelist[n]->d_name,namelist[n]->d_name);
+		}else if(namelist[n]->d_type == DT_DIR)
+		{
+			sprintf(buf,"<li><a href=%s/>%s</a></li>",namelist[n]->d_name,namelist[n]->d_name);
+		}
+		strcat(buffer,buf);
+		free(namelist[n]);
+	}
+
+	free(namelist);
+}
+
 //文件转换
 char *get_mime_type(char *name)
 {
@@ -378,5 +442,7 @@ char *get_mime_type(char *name)
 
     return "text/plain; charset=utf-8";
 }
+
+
 
 
