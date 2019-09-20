@@ -12,6 +12,8 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <dirent.h>
+#include <signal.h>
+
 
 
 //封装的对象，放入epoll的参数中
@@ -29,11 +31,22 @@ static ssize_t  char_read(int fd,char *c);
 int send_header(int fd,char *code,char *msg,char *fileType, int len);
 int send_file(int fd,char *fileName);
 char *get_mime_type(char *name);
-void getDirstr(int fd,char *fileName,char *buffer,int epfd);
+void getDirstr(int fd,char *fileName,char *buffer,int  epfd);
+void strencode(char* to, size_t tosize, const char* from);
+void strdecode(char *to, char *from);
+int hexit(char c);
 
 
 int main(int argc,char* argv[])
 {
+	//屏蔽信号SIG_IGN
+	//则web服务器就会收到SIGPIPE信号
+	struct sigaction act;
+	act.sa_handler = SIG_IGN;
+	sigemptyset(&act.sa_mask);
+	act.sa_flags = 0;
+	sigaction(SIGPIPE,&act,NULL);
+
 	//建立socket
 	int sfd = socket(AF_INET,SOCK_STREAM,0);
 	if(sfd < 0)
@@ -50,6 +63,7 @@ int main(int argc,char* argv[])
 		perror("setsockopt error\n");
 		return -1;
 	}
+
 
 	//socket绑定端口和ip
 	struct sockaddr_in addr;
@@ -197,6 +211,9 @@ void  http_service(client *c,int epfd)
 	{
 		printf("[%s]\n", pFile);//去掉/的剩下的文件名称
 	}
+
+	//转换汉字编码
+	strdecode(pFile, pFile);
 	
 	//循环读取完剩余的数据
 	while((readres=readLine(c->ftd, buf, sizeof(buf)))>0);
@@ -444,5 +461,58 @@ char *get_mime_type(char *name)
 }
 
 
+//"编码"，用作回写浏览器的时候，将除字母数字及/_.-~以外的字符转义后回写。
+//strencode(encoded_name, sizeof(encoded_name), name);
+void strencode(char* to, size_t tosize, const char* from)
+{
+    int tolen;
 
+    for (tolen = 0; *from != '\0' && tolen + 4 < tosize; ++from) {
+        if (isalnum(*from) || strchr("/_.-~", *from) != (char*)0) {
+            *to = *from;
+            ++to;
+            ++tolen;
+        } else {
+            sprintf(to, "%%%02x", (int) *from & 0xff);
+            to += 3;
+            tolen += 3;
+        }
+    }
+    *to = '\0';
+}
+
+//下面的函数第二天使用
+/*
+ * 这里的内容是处理%20之类的东西！是"解码"过程。
+ * %20 URL编码中的‘ ’(space)
+ * %21 '!' %22 '"' %23 '#' %24 '$'
+ * %25 '%' %26 '&' %27 ''' %28 '('......
+ * 相关知识html中的‘ ’(space)是&nbsp
+ */
+void strdecode(char *to, char *from)
+{
+    for ( ; *from != '\0'; ++to, ++from) {
+
+        if (from[0] == '%' && isxdigit(from[1]) && isxdigit(from[2])) { //依次判断from中 %20 三个字符
+
+            *to = hexit(from[1])*16 + hexit(from[2]);//字符串E8变成了真正的16进制的E8
+            from += 2;                      //移过已经处理的两个字符(%21指针指向1),表达式3的++from还会再向后移一个字符
+        } else
+            *to = *from;
+    }
+    *to = '\0';
+}
+
+//16进制数转化为10进制, return 0不会出现
+int hexit(char c)
+{
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
+
+    return 0;
+}
 
